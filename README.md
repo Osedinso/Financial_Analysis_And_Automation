@@ -1,6 +1,7 @@
 # Financial Analysis Application
 
 An AI-powered tool for generating intelligent insights about stocks using natural language queries, custom filters, and real-time market data.
+Deployed @ [https://rq2ajxqrm9lhadujwqwzwq.streamlit.app](url)
 
 ## Overview
 This application seamlessly integrates multiple AI technologies to analyze stock market information. It uses embeddings and large language models to understand user queries and deliver comprehensive, human-readable answers. Users can filter search results by industry, sector, market capitalization, and trading volume. A web interface built with Streamlit provides an accessible, interactive environment for exploring financial insights.
