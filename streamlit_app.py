@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
 import streamlit as st
 import pandas as pd
+import numpy as np  
 from dotenv import load_dotenv
 import plotly.graph_objects as go
 
