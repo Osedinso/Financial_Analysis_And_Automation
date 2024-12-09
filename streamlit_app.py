@@ -1,228 +1,170 @@
-from langchain_pinecone import PineconeVectorStore
-from openai import OpenAI
+import json
+import requests
+import numpy as np
 import yfinance as yf
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from sentence_transformers import SentenceTransformer
-from pinecone import Pinecone
 import streamlit as st
-import pandas as pd
-import numpy as np  
-from dotenv import load_dotenv
-import plotly.graph_objects as go
 
-# Page configuration
-st.set_page_config(
-    page_title="Stock Market Analyzer",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+from sentence_transformers import SentenceTransformer
+from langchain_pinecone import PineconeVectorStore
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from openai import OpenAI
+from pinecone import Pinecone
 
-# Custom CSS
-st.markdown("""
-    <style>
-        .main-header {
-            font-size: 2.5rem;
-            font-weight: 700;
-            color: #1E293B;
-            margin-bottom: 1rem;
-        }
-        .subheader {
-            color: #64748B;
-            font-size: 1.1rem;
-            margin-bottom: 2rem;
-        }
-        .card {
-            padding: 1.5rem;
-            border-radius: 0.75rem;
-            background-color: #FFFFFF;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-            margin-bottom: 1rem;
-        }
-        .metric-card {
-            text-align: center;
-            padding: 1rem;
-            background-color: #F8FAFC;
-            border-radius: 0.5rem;
-            border: 1px solid #E2E8F0;
-        }
-        .metric-value {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: #0EA5E9;
-        }
-        .metric-label {
-            font-size: 0.875rem;
-            color: #64748B;
-        }
-        .stButton > button {
-            width: 100%;
-            background-color: #0EA5E9;
-            color: white;
-            border: none;
-            padding: 0.75rem 1.5rem;
-            border-radius: 0.5rem;
-            font-weight: 600;
-        }
-        .stButton > button:hover {
-            background-color: #0284C7;
-        }
-        .stTextInput > div > div > input {
-            border-radius: 0.5rem;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# Use Streamlit secrets for sensitive information
+pinecone_api_key = st.secrets["PINECONE_API_KEY"]
+groq_api_key = st.secrets["GROQ_API_KEY"]
+yahoo_access_token = st.secrets.get("YAHOO_ACCESS_TOKEN", "")
 
-# Load environment variables
-load_dotenv()
-
-# Initialize clients
-pc = Pinecone(api_key=st.secrets["PINECONE_API_KEY"])
 index_name = "stocks"
 namespace = "stock-descriptions"
-pinecone_index = pc.Index(index_name)
 
-client = OpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=st.secrets["GROQ_API_KEY"]
-)
-
-# Initialize embeddings
+# Initialize embeddings and vector store
 hf_embeddings = HuggingFaceEmbeddings()
 vectorstore = PineconeVectorStore(index_name=index_name, embedding=hf_embeddings)
 
-def get_huggingface_embeddings(text, model_name="sentence-transformers/all-mpnet-base-v2"):
+# Initialize Pinecone client
+pc = Pinecone(api_key=pinecone_api_key)
+pinecone_index = pc.Index(index_name)
+
+# Initialize LLM client
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=groq_api_key
+)
+
+def get_huggingface_embeddings(text: str, model_name: str = "sentence-transformers/all-mpnet-base-v2") -> np.ndarray:
+    """Compute HuggingFace embeddings for a given text input."""
     model = SentenceTransformer(model_name)
     return model.encode(text)
 
-# [Keep your existing helper functions here]
+def get_stock_info_all(symbol: str) -> dict:
+    """
+    Retrieve stock information for a given symbol using Yahoo Finance.
+    Requires a Yahoo access token if protected requests are needed.
+    """
+    headers = {}
+    if yahoo_access_token:
+        headers['Authorization'] = f'Bearer {yahoo_access_token}'
 
-# Main UI
-st.markdown("<h1 class='main-header'>📈 Stock Market Analyzer</h1>", unsafe_allow_html=True)
-st.markdown("<p class='subheader'>Get insights about stocks using advanced AI analysis</p>", unsafe_allow_html=True)
+    session = requests.Session()
+    session.headers.update(headers)
+    try:
+        data = yf.Ticker(symbol, session=session)
+        return data.info or {}
+    except Exception as e:
+        print(f"Error fetching stock info for {symbol}: {e}")
+        return {}
 
-# Create tabs for different functionalities
-tab1, tab2 = st.tabs(["Stock Analysis", "Market Overview"])
+def format_filter_conditions(filter_conditions: dict) -> str:
+    """Format filter conditions into a human-readable string."""
+    if not filter_conditions:
+        return ""
 
-with tab1:
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        with st.container():
-            st.markdown("### 🔍 Query Parameters")
-            query = st.text_area(
-                "Ask about stocks:",
-                placeholder="E.g., 'What are the top performing tech stocks?' or 'Show me stocks with high dividend yields'",
-                height=100
-            )
-    
-    with col2:
-        with st.container():
-            st.markdown("### 🎯 Filters")
-            industry = st.selectbox(
-                'Industry',
-                options=[''] + ['Technology', 'Healthcare', 'Finance', 'Energy', 'Consumer Goods', 'Other']
-            )
-            sector = st.selectbox(
-                'Sector',
-                options=[''] + ['Information Technology', 'Healthcare', 'Financials', 'Energy', 'Consumer Discretionary', 'Other']
-            )
-            
-            col3, col4 = st.columns(2)
-            with col3:
-                market_cap = st.number_input(
-                    'Min Market Cap (M)',
-                    min_value=0,
-                    max_value=1000000,
-                    value=0,
-                    step=1000
-                )
-            with col4:
-                volume = st.number_input(
-                    'Min Volume',
-                    min_value=0,
-                    max_value=1000000,
-                    value=0,
-                    step=10000
-                )
+    formatted_filters = []
+    for key, value in filter_conditions.items():
+        if isinstance(value, dict):
+            for op, val in value.items():
+                operator_map = {
+                    "$gte": "greater than or equal to",
+                    "$lte": "less than or equal to",
+                    "$gt": "greater than",
+                    "$lt": "less than",
+                    "$eq": "equals",
+                    "$in": "in",
+                }
+                op_text = operator_map.get(op, op)
+                formatted_filters.append(f"{key} is {op_text} {val}")
+        else:
+            if value:
+                formatted_filters.append(f"{key}: {value}")
 
-    # Create filter dictionary
-    filter = {
-        "industry": industry if industry else None,
-        "sector": sector if sector else None,
-        "marketCap": {"$gte": market_cap} if market_cap > 0 else None,
-        "volume": {"$gte": volume} if volume > 0 else None
-    }
-    
-    # Remove None values
-    filter = {k: v for k, v in filter.items() if v is not None}
+    return ", ".join(formatted_filters)
 
-    if st.button('Analyze Stocks', key='analyze'):
-        with st.spinner('Analyzing stocks...'):
-            response = HandleQuery(query, filter)
-            
-            st.markdown("### 📊 Analysis Results")
-            st.markdown(response)
-
-with tab2:
-    st.markdown("### 📈 Market Overview")
+def handle_query(query: str, filter_conditions: dict) -> str:
+    """Process the user's query and filters, retrieve relevant info, and get an LLM response."""
+    filter_str = format_filter_conditions(filter_conditions)
+    query_embedding = get_huggingface_embeddings(query)
     
-    # Add market overview metrics
-    col5, col6, col7 = st.columns(3)
-    
-    with col5:
-        st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">$34.5T</div>
-                <div class="metric-label">Total Market Cap</div>
-            </div>
-        """, unsafe_allow_html=True)
-    
-    with col6:
-        st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">3.2%</div>
-                <div class="metric-label">Average Dividend Yield</div>
-            </div>
-        """, unsafe_allow_html=True)
-    
-    with col7:
-        st.markdown("""
-            <div class="metric-card">
-                <div class="metric-value">24.5</div>
-                <div class="metric-label">Average P/E Ratio</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    # Add a sample market trend chart
-    chart_data = pd.DataFrame({
-        'Date': pd.date_range(start='2024-01-01', periods=30),
-        'Value': [100 + i + np.random.randn() * 5 for i in range(30)]
-    })
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=chart_data['Date'],
-        y=chart_data['Value'],
-        mode='lines',
-        fill='tonexty',
-        line=dict(color='#0EA5E9')
-    ))
-    
-    fig.update_layout(
-        title="Market Trend (Last 30 Days)",
-        xaxis_title="Date",
-        yaxis_title="Market Value",
-        template="plotly_white",
-        height=400
+    top_matches = pinecone_index.query(
+        vector=query_embedding.tolist(),
+        top_k=10,
+        include_metadata=True,
+        namespace=namespace,
+        filter=filter_conditions if filter_conditions else None
     )
-    
-    st.plotly_chart(fig, use_container_width=True)
 
-# Footer
-st.markdown("---")
-st.markdown("""
-    <div style='text-align: center; color: #64748B; font-size: 0.875rem;'>
-        Data provided by various financial sources. Use at your own discretion.
-    </div>
-""", unsafe_allow_html=True)
+    contexts = [item['metadata']['text'] for item in top_matches.get('matches', [])]
+    context_str = "\n\n-------\n\n".join(contexts[:10])
+
+    augmented_query = (
+        f"<CONTEXT>\n{context_str}\n-------\n</CONTEXT>\n\n"
+        f"MY QUESTION:\n{query}\n{filter_str}"
+    )
+
+    system_prompt = (
+        "You are an expert at providing answers about stocks. Please answer my question.\n\n"
+        "When giving your response, do not mention the context or the query directly.\n"
+        "Provide a detailed answer in markdown format, listing all relevant stocks and information.\n"
+        "Order the answers from most relevant to least relevant.\n"
+        "If no direct question is asked, list all the stocks that match the filters and their details.\n"
+    )
+
+    llm_response = client.chat.completions.create(
+        model="llama-3.1-70b-versatile",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": augmented_query}
+        ]
+    )
+
+    response = llm_response.choices[0].message.content.strip()
+    return response
+
+# Streamlit UI Configuration
+st.set_page_config(page_title="AI-Powered Stock Analysis", layout="wide")
+
+# Sidebar for Filters and Instructions
+st.sidebar.title("Stock Analysis Filters")
+st.sidebar.write("**Use the filters below to narrow down results.**")
+
+industry = st.sidebar.text_input('Industry:', help="e.g., Technology, Healthcare, Finance")
+sector = st.sidebar.text_input('Sector:', help="e.g., Consumer Defensive, Energy")
+market_cap = st.sidebar.number_input('Minimum Market Cap:', min_value=0, max_value=10**9, step=1000000, help="Enter a number. Stocks with market cap greater than or equal to this value will be shown.")
+volume = st.sidebar.number_input('Minimum Volume:', min_value=0, max_value=10**9, step=100000, help="Enter a number. Stocks with volume greater than or equal to this value will be shown.")
+
+st.sidebar.write("---")
+st.sidebar.write("**How to Use:**")
+st.sidebar.markdown("- Enter a natural language query about stocks in the main page.\n- Apply filters in the sidebar if desired.\n- Click **Get Stock Info** to view results.")
+
+# Main Page
+st.title("AI-Powered Stock Analysis")
+st.write("Use natural language queries to find stocks that match certain criteria and get detailed AI-generated insights. For best results, be specific in your query and utilize the filters.")
+
+query = st.text_input('Ask about stocks:', placeholder="e.g., 'Show me top performing tech companies.'")
+
+filters = {
+    "industry": industry if industry else None,
+    "sector": sector if sector else None,
+    "marketCap": {"$gte": market_cap} if market_cap > 0 else None,
+    "volume": {"$gte": volume} if volume > 0 else None
+}
+filters = {k: v for k, v in filters.items() if v is not None}
+
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    if st.button("Get Stock Info"):
+        if not query and not filters:
+            st.error("Please provide a query or at least one filter.")
+        else:
+            with st.spinner("Analyzing stocks..."):
+                response = handle_query(query, filters)
+
+            st.write("### Response:")
+            if response:
+                st.markdown(response)
+            else:
+                st.error("No information found for this query.")
+
+with col2:
+    st.info("**Tips:**\n- Try asking about companies in a specific industry or sector.\n- Combine filters and queries for more targeted results.\n- Example query: 'Which companies have a market cap over 1B in the healthcare sector?'")
