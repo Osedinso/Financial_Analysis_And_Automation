@@ -6,6 +6,7 @@ langchain-community
 sentence-transformers
 pinecone-client
 numpy
+plotly
 requests
 scikit-learn
 streamlit
